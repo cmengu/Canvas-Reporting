@@ -1,5 +1,7 @@
 snapshots/
+index.html
 report.html
 weekly.log
+server.log
 .canvas_token
 .DS_Store

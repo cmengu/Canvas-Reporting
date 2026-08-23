@@ -288,7 +288,7 @@ def render(snap, d):
 
     body = f"""<title>Canvas Weekly</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
 <style>{CSS}</style>
 <div class="page">
 <header>
@@ -325,16 +325,16 @@ CSS = """
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
-  font:16px/1.55 "Public Sans",-apple-system,"Segoe UI",sans-serif}
+  font:15.5px/1.55 Geist,-apple-system,"Segoe UI",sans-serif}
 .page{max-width:860px;margin:0 auto;padding:40px 20px 64px}
-.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.mono{font-family:"Geist Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
 .dim{color:var(--muted)}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
 a:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 header{margin-bottom:28px}
 .kicker{font-size:12px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin:0 0 6px}
-h1{font-family:Sora,"Public Sans",sans-serif;font-size:32px;font-weight:700;margin:0 0 16px;text-wrap:balance}
+h1{font-size:30px;font-weight:700;letter-spacing:-.02em;margin:0 0 16px;text-wrap:balance}
 .demo{background:var(--accent-soft);color:var(--accent);border-radius:6px;padding:8px 12px;
   font-size:13.5px;font-weight:500;display:inline-block;margin:0 0 16px}
 .stats{display:flex;gap:10px;flex-wrap:wrap}
@@ -345,7 +345,7 @@ h1{font-family:Sora,"Public Sans",sans-serif;font-size:32px;font-weight:700;marg
 .tabbar{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:18px}
 .tab{appearance:none;background:none;border:none;border-bottom:2px solid transparent;
   padding:9px 12px;margin-bottom:-1px;cursor:pointer;color:var(--muted);
-  font:500 14px/1.4 "Public Sans",-apple-system,sans-serif;display:flex;gap:7px;align-items:center}
+  font:500 14px/1.4 Geist,-apple-system,sans-serif;display:flex;gap:7px;align-items:center}
 .tab:hover{color:var(--ink)}
 .tab[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
 .tab.danger[aria-selected="true"]{color:var(--danger);border-bottom-color:var(--danger)}
@@ -358,7 +358,7 @@ section{background:var(--surface);border:1px solid var(--line);border-radius:10p
 section.danger{border-left:3px solid var(--danger)}
 section.good{border-left:3px solid var(--good)}
 h2{display:flex;align-items:baseline;gap:10px;margin:0 0 8px}
-.eyebrow{font-family:Sora,sans-serif;font-size:14px;font-weight:600;letter-spacing:.02em}
+.eyebrow{font-size:14px;font-weight:600;letter-spacing:.01em}
 section.danger .eyebrow{color:var(--danger)}
 section.good .eyebrow{color:var(--good)}
 .count{font-size:12.5px;color:var(--muted)}
@@ -374,7 +374,7 @@ ul li:first-child.row{border-top:none}
 .row.done .rowtop a{text-decoration:line-through;color:var(--muted)}
 .rowsub{font-size:12.5px;color:var(--muted);margin-top:2px}
 .chip{background:var(--accent-soft);color:var(--accent);border-radius:4px;
-  font:500 11.5px/1.6 "IBM Plex Mono",monospace;padding:1px 7px;flex:none}
+  font:500 11.5px/1.6 "Geist Mono",monospace;padding:1px 7px;flex:none}
 .note{font-size:12px;color:var(--danger);font-style:italic}
 .note.new{color:var(--accent);font-style:normal;font-weight:600}
 .course h4{display:flex;gap:8px;align-items:center;margin:12px 0 0;font-size:13.5px;font-weight:600}
@@ -478,11 +478,11 @@ def main():
         prev = load_previous_snapshot()
 
     d = diff_snapshots(prev, snap)
-    (ROOT / "report.html").write_text(render(snap, d))
+    (ROOT / "index.html").write_text(render(snap, d))
     if not demo:
         SNAP_DIR.mkdir(exist_ok=True)
         (SNAP_DIR / f"{datetime.now(SGT):%Y-%m-%d}.json").write_text(json.dumps(snap))
-    print(f"report.html written ({'demo' if demo else 'live'} mode)")
+    print(f"index.html written ({'demo' if demo else 'live'} mode)")
 
 
 if __name__ == "__main__":
