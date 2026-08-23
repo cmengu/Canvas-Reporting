@@ -22,7 +22,6 @@ SNAP_DIR = ROOT / "snapshots"
 CONFIG = json.loads((ROOT / "config.json").read_text()) if (ROOT / "config.json").exists() else {}
 BASE_URL = CONFIG.get("base_url", "https://canvas.nus.edu.sg")
 SGT = timezone(timedelta(hours=8))
-LOOKAHEAD_WEEKS = 3
 
 
 # ---------------------------------------------------------------- Canvas API
@@ -63,13 +62,29 @@ def gather(token):
         cid = str(c["id"])
         snap["courses"][cid] = {"code": c.get("course_code") or c["name"], "name": c["name"]}
 
-        for a in api_get(token, f"courses/{cid}/assignments", {"include[]": "submission"}):
+        # group_weight is the % of the final grade each assignment group carries
+        # (only set when the course uses weighted assignment groups)
+        groups = {str(g["id"]): {"name": g.get("name", ""), "weight": g.get("group_weight") or 0}
+                  for g in api_get(token, f"courses/{cid}/assignment_groups")}
+        raw = api_get(token, f"courses/{cid}/assignments", {"include[]": "submission"})
+        group_pts = {}
+        for a in raw:
+            gid = str(a.get("assignment_group_id"))
+            group_pts[gid] = group_pts.get(gid, 0) + (a.get("points_possible") or 0)
+        for a in raw:
+            gid = str(a.get("assignment_group_id"))
+            g = groups.get(gid, {})
+            weight_pct = None
+            if g.get("weight") and group_pts.get(gid):
+                weight_pct = round(g["weight"] * (a.get("points_possible") or 0) / group_pts[gid], 1)
             sub = a.get("submission") or {}
             snap["assignments"][str(a["id"])] = {
                 "course": cid,
                 "name": a.get("name", "Untitled"),
                 "due_at": a.get("due_at"),
                 "points": a.get("points_possible"),
+                "weight_pct": weight_pct,
+                "group": g.get("name", ""),
                 "url": a.get("html_url", ""),
                 "submitted": sub.get("workflow_state") not in (None, "unsubmitted"),
                 "missing": bool(sub.get("missing")),
@@ -141,14 +156,33 @@ def chip(snap, cid):
     return f'<span class="chip">{esc(snap["courses"].get(cid, {}).get("code", "?"))}</span>'
 
 
-def assignment_row(snap, aid, ticked=True, note=""):
+def row_sub(a):
+    parts = [esc(fmt_due(a["due_at"]))]
+    if a.get("points"):
+        parts.append(f'{a["points"]:g} pts')
+    if a.get("weight_pct"):
+        parts.append(f'≈{a["weight_pct"]:g}% of grade')
+    return " · ".join(parts)
+
+
+def assignment_row(snap, aid, ticked=True, notes=""):
     a = snap["assignments"][aid]
-    pts = f'<span class="mono dim">{a["points"]:g} pts</span>' if a.get("points") else ""
     box = f'<input type="checkbox" data-tick="{esc(aid)}" aria-label="done">' if ticked else ""
-    note_html = f'<span class="note">{note}</span>' if note else ""
     return (f'<li class="row">{box}<div class="rowbody">'
-            f'<div class="rowtop">{chip(snap, a["course"])}<a href="{esc(a["url"])}">{esc(a["name"])}</a>{note_html}</div>'
-            f'<div class="rowsub mono">{esc(fmt_due(a["due_at"]))} &nbsp;{pts}</div></div></li>')
+            f'<div class="rowtop">{chip(snap, a["course"])}<a href="{esc(a["url"])}">{esc(a["name"])}</a>{notes}</div>'
+            f'<div class="rowsub mono">{row_sub(a)}</div></div></li>')
+
+
+def todo_row(snap, aid, new_ids, due_was):
+    a = snap["assignments"][aid]
+    notes = []
+    if aid in new_ids:
+        notes.append('<span class="note new">(new this week)</span>')
+    if aid in due_was:
+        notes.append(f'<span class="note">(was {esc(fmt_due(due_was[aid]))})</span>')
+    return (f'<li class="row"><input type="checkbox" data-tick="{esc(aid)}" aria-label="done"><div class="rowbody">'
+            f'<div class="rowtop"><a href="{esc(a["url"])}">{esc(a["name"])}</a>{"".join(notes)}</div>'
+            f'<div class="rowsub mono">{row_sub(a)}</div></div></li>')
 
 
 def tab_pack(pid, label, title, count, body, tone=""):
@@ -166,50 +200,48 @@ def render(snap, d):
 
     assignments = snap["assignments"]
 
-    due_this_week = sorted((aid for aid, a in assignments.items() if due_between(a, now, now + timedelta(days=7))),
-                           key=lambda i: assignments[i]["due_at"])
+    due_soon_count = sum(1 for a in assignments.values() if due_between(a, now, now + timedelta(days=7)))
     red_flags = sorted((aid for aid, a in assignments.items()
                         if a.get("due_at") and parse_iso(a["due_at"]) < now
                         and not a.get("submitted") and a.get("score") is None
                         and parse_iso(a["due_at"]) > now - timedelta(days=45)),
                        key=lambda i: assignments[i]["due_at"], reverse=True)
-
-    lookahead = []
-    for w in range(1, LOOKAHEAD_WEEKS + 1):
-        lo, hi = now + timedelta(days=7 * w), now + timedelta(days=7 * (w + 1))
-        ids = sorted((aid for aid, a in assignments.items() if due_between(a, lo, hi)),
-                     key=lambda i: assignments[i]["due_at"])
-        if ids:
-            lookahead.append((lo, ids))
-
-    # -- section bodies
     flags_html = "<ul>" + "".join(assignment_row(snap, i, ticked=False) for i in red_flags) + "</ul>" if red_flags else ""
-    due_html = ("<ul>" + "".join(assignment_row(snap, i) for i in due_this_week) + "</ul>"
-                if due_this_week else '<p class="empty">Nothing due this week.</p>')
 
-    ch = []
-    if d["first_run"]:
-        ch.append('<p class="empty">First run — baseline captured. Changes appear from next Friday.</p>')
-    else:
-        if d["new_assignments"]:
-            ch.append('<h3>New assignments</h3><ul>' + "".join(assignment_row(snap, i, ticked=False) for i in d["new_assignments"]) + "</ul>")
-        for aid, old in d["due_changes"]:
-            ch.append('<h3>Due date changed</h3>' if "Due date changed" not in "".join(ch) else "")
-            ch.append("<ul>" + assignment_row(snap, aid, ticked=False, note=f"was {esc(fmt_due(old))}") + "</ul>")
-        if d["new_files"]:
-            items = "".join(f'<li class="row"><div class="rowbody"><div class="rowtop">{chip(snap, snap["files"][f]["course"])}'
-                            f'<a href="{esc(snap["files"][f]["url"])}">{esc(snap["files"][f]["title"])}</a></div>'
-                            f'<div class="rowsub mono dim">{esc(snap["files"][f]["module"])}</div></div></li>'
-                            for f in d["new_files"])
-            ch.append(f"<h3>New files</h3><ul>{items}</ul>")
-        if not any((d["new_assignments"], d["due_changes"], d["new_files"])):
-            ch.append('<p class="empty">No changes since last Friday.</p>')
-    changes_html = "".join(ch)
-    changes_count = "—" if d["first_run"] else len(d["new_assignments"]) + len(d["due_changes"]) + len(d["new_files"])
+    # -- To-do: every upcoming assignment, grouped week -> module,
+    #    with changes bracketed inline instead of a separate tab
+    new_ids = set(d["new_assignments"])
+    due_was = dict(d["due_changes"])
 
-    look_html = "".join(f'<h3>{lo.strftime("%d %b")} – {(lo + timedelta(days=6)).strftime("%d %b")}</h3><ul>'
-                        + "".join(assignment_row(snap, i, ticked=False) for i in ids) + "</ul>"
-                        for lo, ids in lookahead) or '<p class="empty">Nothing on the horizon yet.</p>'
+    def week_of(dt):
+        return (dt - timedelta(days=dt.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    weeks = {}
+    for aid, a in assignments.items():
+        dt = parse_iso(a.get("due_at"))
+        if dt is not None and dt >= now:
+            weeks.setdefault(week_of(dt), {}).setdefault(a["course"], []).append(aid)
+
+    todo_parts, todo_count = [], 0
+    for wk in sorted(weeks):
+        tag = ' <span class="dim">· this week</span>' if wk == week_of(now) else ""
+        todo_parts.append(f'<h3>Week of {wk.strftime("%d %b")}{tag}</h3>')
+        for cid in sorted(weeks[wk], key=lambda c: snap["courses"].get(c, {}).get("code", "")):
+            aids = sorted(weeks[wk][cid], key=lambda i: assignments[i]["due_at"])
+            todo_count += len(aids)
+            todo_parts.append(
+                f'<div class="course"><h4>{chip(snap, cid)}'
+                f'<span class="cname">{esc(snap["courses"].get(cid, {}).get("name", ""))}</span></h4>'
+                f'<ul>{"".join(todo_row(snap, i, new_ids, due_was) for i in aids)}</ul></div>')
+    if d["new_files"]:
+        items = "".join(f'<li class="row"><div class="rowbody"><div class="rowtop">{chip(snap, snap["files"][f]["course"])}'
+                        f'<a href="{esc(snap["files"][f]["url"])}">{esc(snap["files"][f]["title"])}</a>'
+                        f'<span class="note new">(new)</span></div>'
+                        f'<div class="rowsub mono dim">{esc(snap["files"][f]["module"])}</div></div></li>'
+                        for f in d["new_files"])
+        todo_parts.append(f"<h3>New files this week</h3><ul>{items}</ul>")
+    todo_html = "".join(todo_parts) or '<p class="empty">Nothing upcoming — enjoy the calm.</p>'
+    changes_count = 0 if d["first_run"] else len(d["new_assignments"]) + len(d["due_changes"]) + len(d["new_files"])
 
     grades_html = ""
     if d["new_grades"]:
@@ -217,8 +249,9 @@ def render(snap, d):
         for aid in d["new_grades"]:
             a = assignments[aid]
             score = f'{a["score"]:g}' + (f' / {a["points"]:g}' if a.get("points") else "")
+            wt = f'<span class="dim mono"> ≈{a["weight_pct"]:g}% of grade</span>' if a.get("weight_pct") else ""
             rows.append(f'<li class="row"><div class="rowbody"><div class="rowtop">{chip(snap, a["course"])}'
-                        f'<a href="{esc(a["url"])}">{esc(a["name"])}</a><span class="score mono">{score}</span></div></div></li>')
+                        f'<a href="{esc(a["url"])}">{esc(a["name"])}</a><span class="score mono">{score}</span>{wt}</div></div></li>')
         grades_html = "<ul>" + "".join(rows) + "</ul>"
 
     anns = sorted(snap["announcements"], key=lambda x: x.get("posted_at") or "", reverse=True)
@@ -229,18 +262,16 @@ def render(snap, d):
                        for an in anns)
     ann_html = f"<ul>{ann_html}</ul>" if ann_html else ""
 
-    stats = [("due in 7 days", len(due_this_week)), ("red flags", len(red_flags)),
-             ("changes", changes_count), ("grades in", len(d["new_grades"]))]
+    stats = [("due in 7 days", due_soon_count), ("red flags", len(red_flags)),
+             ("new this week", changes_count), ("grades in", len(d["new_grades"]))]
     stats_html = "".join(f'<div class="stat"><span class="statnum mono">{n}</span><span class="statlbl">{esc(l)}</span></div>'
                          for l, n in stats)
 
     demo_banner = '<p class="demo">Sample data — connect your Canvas token for the real thing.</p>' if snap.get("demo") else ""
 
     tabs = [t for t in [
+        tab_pack("todo", "To-do", "To-do — by week, by module", todo_count, todo_html),
         tab_pack("flags", "Red flags", "Red flags — past due, not submitted", len(red_flags), flags_html, "danger"),
-        tab_pack("due", "Due soon", "Due in the next 7 days", len(due_this_week), due_html),
-        tab_pack("changes", "Changes", "Changed since last Friday", changes_count, changes_html),
-        tab_pack("ahead", "Next 3 weeks", "The next 3 weeks", sum(len(i) for _, i in lookahead), look_html),
         tab_pack("grades", "Grades", "Grades released this week", len(d["new_grades"]), grades_html, "good"),
         tab_pack("news", "Announcements", "Announcements, last 7 days", len(anns), ann_html),
     ] if t["body"]]
@@ -345,6 +376,9 @@ ul li:first-child.row{border-top:none}
 .chip{background:var(--accent-soft);color:var(--accent);border-radius:4px;
   font:500 11.5px/1.6 "IBM Plex Mono",monospace;padding:1px 7px;flex:none}
 .note{font-size:12px;color:var(--danger);font-style:italic}
+.note.new{color:var(--accent);font-style:normal;font-weight:600}
+.course h4{display:flex;gap:8px;align-items:center;margin:12px 0 0;font-size:13.5px;font-weight:600}
+.cname{color:var(--muted);font-weight:500}
 .score{margin-left:auto;color:var(--good);font-weight:500}
 .annbody{font-size:13.5px;color:var(--muted);margin:4px 0 0;max-width:65ch}
 .empty{color:var(--muted);font-size:14px;margin:6px 0}
@@ -395,20 +429,20 @@ def demo_snapshots():
                "2": {"code": "CS2105", "name": "Computer Networks"},
                "3": {"code": "BT4301", "name": "Business Analytics Solutions"},
                "4": {"code": "IS3109", "name": "AI for Business"}}
-    A = lambda c, n, due, pts, sub=False, sc=None, ga=None, miss=False: {
-        "course": c, "name": n, "due_at": due, "points": pts, "url": "https://canvas.nus.edu.sg/",
-        "submitted": sub, "missing": miss, "score": sc, "graded_at": ga}
+    A = lambda c, n, due, pts, w=None, sub=False, sc=None, ga=None, miss=False: {
+        "course": c, "name": n, "due_at": due, "points": pts, "weight_pct": w, "group": "",
+        "url": "https://canvas.nus.edu.sg/", "submitted": sub, "missing": miss, "score": sc, "graded_at": ga}
     cur = {"generated_at": now.isoformat(), "demo": True, "courses": courses, "assignments": {
-        "101": A("1", "Lab 3 — Streams and Optionals", iso(2), 10),
-        "102": A("2", "Assignment 1 — Socket Programming", iso(4, 16, 0), 15),
-        "103": A("4", "Case Brief: Agentic AI in Retail Banking", iso(5), 8),
-        "104": A("3", "Tutorial 2 Quiz", iso(-3), 5, miss=True),
-        "105": A("1", "Lab 4 — Generics", iso(9), 10),
-        "106": A("2", "Quiz 2 — Transport Layer", iso(11, 20, 0), 6),
-        "107": A("3", "Group Project Milestone 1", iso(16, 18, 0), 20),
-        "108": A("4", "Midterm — in lecture", iso(19, 12, 0), 30),
-        "109": A("1", "Lab 2 — Immutability", iso(-6), 10, sub=True, sc=9, ga=iso(-1)),
-        "110": A("2", "Quiz 1 — Intro and HTTP", iso(-9), 6, sub=True, sc=5.5, ga=iso(-2)),
+        "101": A("1", "Lab 3 — Streams and Optionals", iso(2), 10, w=2.5),
+        "102": A("2", "Assignment 1 — Socket Programming", iso(4, 16, 0), 15, w=7.5),
+        "103": A("4", "Case Brief: Agentic AI in Retail Banking", iso(5), 8, w=10),
+        "104": A("3", "Tutorial 2 Quiz", iso(-3), 5, w=2, miss=True),
+        "105": A("1", "Lab 4 — Generics", iso(9), 10, w=2.5),
+        "106": A("2", "Quiz 2 — Transport Layer", iso(11, 20, 0), 6, w=3),
+        "107": A("3", "Group Project Milestone 1", iso(16, 18, 0), 20, w=12),
+        "108": A("4", "Midterm — in lecture", iso(19, 12, 0), 30, w=25),
+        "109": A("1", "Lab 2 — Immutability", iso(-6), 10, w=2.5, sub=True, sc=9, ga=iso(-1)),
+        "110": A("2", "Quiz 1 — Intro and HTTP", iso(-9), 6, w=3, sub=True, sc=5.5, ga=iso(-2)),
     }, "files": {
         "f1": {"course": "1", "title": "Lec 4 — Streams.pdf", "module": "Week 4", "url": "https://canvas.nus.edu.sg/"},
         "f2": {"course": "2", "title": "Tut 3 worksheet.pdf", "module": "Week 4", "url": "https://canvas.nus.edu.sg/"},
