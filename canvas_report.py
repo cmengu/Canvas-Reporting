@@ -151,11 +151,8 @@ def assignment_row(snap, aid, ticked=True, note=""):
             f'<div class="rowsub mono">{esc(fmt_due(a["due_at"]))} &nbsp;{pts}</div></div></li>')
 
 
-def section(title, count, body, tone=""):
-    if not body:
-        return ""
-    return (f'<section class="{tone}"><h2><span class="eyebrow">{esc(title)}</span>'
-            f'<span class="count mono">{count}</span></h2>{body}</section>')
+def tab_pack(pid, label, title, count, body, tone=""):
+    return {"id": pid, "label": label, "title": title, "count": count, "body": body, "tone": tone}
 
 
 def render(snap, d):
@@ -239,6 +236,25 @@ def render(snap, d):
 
     demo_banner = '<p class="demo">Sample data — connect your Canvas token for the real thing.</p>' if snap.get("demo") else ""
 
+    tabs = [t for t in [
+        tab_pack("flags", "Red flags", "Red flags — past due, not submitted", len(red_flags), flags_html, "danger"),
+        tab_pack("due", "Due soon", "Due in the next 7 days", len(due_this_week), due_html),
+        tab_pack("changes", "Changes", "Changed since last Friday", changes_count, changes_html),
+        tab_pack("ahead", "Next 3 weeks", "The next 3 weeks", sum(len(i) for _, i in lookahead), look_html),
+        tab_pack("grades", "Grades", "Grades released this week", len(d["new_grades"]), grades_html, "good"),
+        tab_pack("news", "Announcements", "Announcements, last 7 days", len(anns), ann_html),
+    ] if t["body"]]
+
+    tabbar = "".join(
+        f'<button class="tab {t["tone"]}" role="tab" data-tab="{t["id"]}" aria-selected="false" '
+        f'aria-controls="panel-{t["id"]}">{esc(t["label"])}<span class="tcount mono">{t["count"]}</span></button>'
+        for t in tabs)
+    panels = "".join(
+        f'<section class="panel {t["tone"]}" id="panel-{t["id"]}" role="tabpanel" hidden>'
+        f'<h2><span class="eyebrow">{esc(t["title"])}</span><span class="count mono">{t["count"]}</span></h2>'
+        f'{t["body"]}</section>'
+        for t in tabs)
+
     body = f"""<title>Canvas Weekly</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -250,12 +266,8 @@ def render(snap, d):
   {demo_banner}
   <div class="stats">{stats_html}</div>
 </header>
-{section("Red flags — past due, not submitted", len(red_flags), flags_html, tone="danger")}
-{section("Due in the next 7 days", len(due_this_week), due_html)}
-{section("Changed since last Friday", changes_count, changes_html)}
-{section("Next 3 weeks", sum(len(i) for _, i in lookahead), look_html)}
-{section("Grades released", len(d["new_grades"]), grades_html, tone="good")}
-{section("Announcements, last 7 days", len(anns), ann_html)}
+<nav class="tabbar" role="tablist" aria-label="Report sections">{tabbar}</nav>
+{panels}
 <footer class="mono dim">Canvas Weekly · updates every Friday morning</footer>
 </div>
 <script>{JS}</script>"""
@@ -299,6 +311,17 @@ h1{font-family:Sora,"Public Sans",sans-serif;font-size:32px;font-weight:700;marg
   padding:10px 16px;display:flex;flex-direction:column;min-width:104px;box-shadow:var(--shadow)}
 .statnum{font-size:22px;font-weight:500}
 .statlbl{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.tabbar{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:18px}
+.tab{appearance:none;background:none;border:none;border-bottom:2px solid transparent;
+  padding:9px 12px;margin-bottom:-1px;cursor:pointer;color:var(--muted);
+  font:500 14px/1.4 "Public Sans",-apple-system,sans-serif;display:flex;gap:7px;align-items:center}
+.tab:hover{color:var(--ink)}
+.tab[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.tab.danger[aria-selected="true"]{color:var(--danger);border-bottom-color:var(--danger)}
+.tab.good[aria-selected="true"]{color:var(--good);border-bottom-color:var(--good)}
+.tcount{font-size:11.5px;background:var(--line);border-radius:10px;padding:0 7px;color:var(--muted)}
+.tab.danger .tcount{background:var(--danger-soft);color:var(--danger)}
+.tab.good .tcount{background:var(--good-soft);color:var(--good)}
 section{background:var(--surface);border:1px solid var(--line);border-radius:10px;
   padding:18px 20px;margin-bottom:16px;box-shadow:var(--shadow)}
 section.danger{border-left:3px solid var(--danger)}
@@ -332,6 +355,22 @@ footer{margin-top:32px;font-size:12px;text-align:center}
 """
 
 JS = """
+var tabs = [].slice.call(document.querySelectorAll('.tab'));
+function showTab(id){
+  tabs.forEach(function(t){
+    var on = t.dataset.tab === id;
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+    var p = document.getElementById('panel-' + t.dataset.tab);
+    if (p) p.hidden = !on;
+  });
+  try { localStorage.setItem('active-tab', id); } catch(e){}
+}
+if (tabs.length){
+  var stored = null;
+  try { stored = localStorage.getItem('active-tab'); } catch(e){}
+  showTab(tabs.some(function(t){ return t.dataset.tab === stored; }) ? stored : tabs[0].dataset.tab);
+  tabs.forEach(function(t){ t.addEventListener('click', function(){ showTab(t.dataset.tab); }); });
+}
 document.querySelectorAll('input[data-tick]').forEach(function(box){
   var key = 'tick-' + box.dataset.tick;
   try { if (localStorage.getItem(key) === '1') { box.checked = true; box.closest('.row').classList.add('done'); } } catch(e){}
